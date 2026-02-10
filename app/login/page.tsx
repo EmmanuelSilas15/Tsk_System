@@ -1,39 +1,98 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { LogIn, Mail, Lock } from 'lucide-react';
+import { Toast } from '@/src/components/Toast';
+import { supabase } from '@/supabase/supabaseClient';
+
+type ToastType = 'success' | 'error' | 'info' | 'warning';
+
+interface ToastMessage {
+  id: string;
+  message: string;
+  type: ToastType;
+}
 
 export default function LoginPage() {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
   });
+
   const [loading, setLoading] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+
+  const showToast = (message: string, type: ToastType = 'info') => {
+    setToast({
+      id: Date.now().toString(),
+      message,
+      type,
+    });
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({
-      ...formData,
+    setFormData((prev) => ({
+      ...prev,
       [e.target.name]: e.target.value,
-    });
+    }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      console.log('Login attempt:', formData);
-      alert(`Login attempt with email: ${formData.email}`);
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: formData.email.trim().toLowerCase(),
+        password: formData.password,
+      });
+
+      if (error) throw error;
+
+      if (!rememberMe) {
+        const handler = async () => {
+          await supabase.auth.signOut();
+        };
+        window.addEventListener('beforeunload', handler, { once: true });
+      }
+
+      showToast('Login successful. Redirecting...', 'success');
+      
+      // Clear form
+      setFormData({ email: '', password: '' });
+
+      // Redirect after showing toast
+      setTimeout(() => {
+        window.location.href = '/form';
+      }, 1000);
+    } catch (err: any) {
+      const msg = (err?.message || '').toLowerCase();
+
+      if (msg.includes('invalid login credentials')) {
+        showToast('Incorrect email or password.', 'error');
+      } else if (msg.includes('email not confirmed')) {
+        showToast('Please confirm your email first, then login.', 'error');
+      } else {
+        showToast(err?.message ?? 'Login failed.', 'error');
+      }
+    } finally {
       setLoading(false);
-    }, 1500);
+    }
   };
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-blue-900/20">
+      {/* Toast Notification */}
+      <Toast 
+        toast={toast} 
+        onClose={() => setToast(null)}
+        duration={4000}
+      />
+
       <motion.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -88,12 +147,13 @@ export default function LoginPage() {
                 placeholder="Enter your password"
                 autoComplete="current-password"
                 required
+                minLength={6}
                 className="w-full pl-12 pr-4 py-3 bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-gray-800 dark:text-gray-100"
               />
             </div>
           </div>
 
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center justify-between mb-3">
             <label className="flex items-center cursor-pointer group">
               <input
                 type="checkbox"

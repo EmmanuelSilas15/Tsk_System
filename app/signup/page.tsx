@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState } from 'react';
@@ -7,6 +8,16 @@ import { UserPlus, Mail, Lock, User } from 'lucide-react';
 import FloatingBackground from '../../src/components/FloatingBackground';
 import AnimatedLayout from '../../src/components/AnimatedLayout';
 import AnimatedButton from '../../src/components/AnimatedButton';
+import { Toast } from '../../src/components/Toast';
+import { supabase } from '@/supabase/supabaseClient';
+
+type ToastType = 'success' | 'error' | 'info' | 'warning';
+
+interface ToastMessage {
+  id: string;
+  message: string;
+  type: ToastType;
+}
 
 export default function SignupPage() {
   const [formData, setFormData] = useState({
@@ -15,35 +26,87 @@ export default function SignupPage() {
     password: '',
     confirmPassword: '',
   });
-  const [loading, setLoading] = useState(false);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+
+  const showToast = (message: string, type: ToastType = 'info') => {
+    setToast({
+      id: Date.now().toString(),
+      message,
+      type,
     });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData((prev) => ({
+      ...prev,
+      [e.target.name]: e.target.value,
+    }));
+  };
+
+  async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
-    
+
     if (formData.password !== formData.confirmPassword) {
-      alert("Passwords don't match!");
+      showToast("Passwords don't match!", 'error');
       return;
     }
-    
+
     setLoading(true);
-    
-    setTimeout(() => {
-      console.log('Signup attempt:', formData);
+
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: formData.email.trim().toLowerCase(),
+        password: formData.password,
+        options: {
+          data: { full_name: formData.name },
+        },
+      });
+
+      if (error) {
+        const msg = (error.message || "").toLowerCase();
+
+        if (
+          msg.includes("already") ||
+          msg.includes("registered") ||
+          msg.includes("exists")
+        ) {
+          showToast("This email already has an account. Please login instead.", 'error');
+          return;
+        }
+
+        throw error;
+      }
+
+      // ✅ If email confirmation is ON, user may be null until confirmed
+      if (!data.user) {
+        showToast("Check your email to confirm your account, then login.", 'info');
+      } else {
+        showToast("Account created successfully! You can now login.", 'success');
+      }
+
+      // ✅ Clear form after successful signup
+      setFormData({ name: "", email: "", password: "", confirmPassword: "" });
+    } catch (err: any) {
+      showToast(err?.message ?? "Signup failed. Please try again.", 'error');
+    } finally {
       setLoading(false);
-    }, 1500);
-  };
+    }
+  }
+
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-purple-900/20 relative overflow-hidden">
       <FloatingBackground />
       
+      {/* Toast Notification */}
+      <Toast 
+        toast={toast} 
+        onClose={() => setToast(null)}
+        duration={4000}
+      />
+
       <AnimatedLayout>
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
@@ -65,7 +128,8 @@ export default function SignupPage() {
             </p>
           </div>
 
-          <form onSubmit={handleSubmit}>
+          {/* ✅ use handleSignup */}
+          <form onSubmit={handleSignup}>
             <div className="mb-6">
               <div className="relative">
                 <div className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400">
@@ -113,6 +177,7 @@ export default function SignupPage() {
                   onChange={handleChange}
                   className="w-full pl-12 py-4 bg-white dark:bg-gray-800 rounded-xl border-2 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-purple-500 transition-all"
                   required
+                  minLength={6}
                 />
               </div>
             </div>
@@ -130,6 +195,7 @@ export default function SignupPage() {
                   onChange={handleChange}
                   className="w-full pl-12 py-4 bg-white dark:bg-gray-800 rounded-xl border-2 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-purple-500 transition-all"
                   required
+                  minLength={6}
                 />
               </div>
             </div>

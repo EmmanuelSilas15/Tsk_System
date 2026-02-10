@@ -1,18 +1,54 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Car, Save, Download, RefreshCw, Calculator, FileText, Mail, History, X, Eye, Trash2, Copy, Search, Filter, SortAsc, SortDesc, Calendar, DollarSign, User, Home, Printer, ChevronLeft, ChevronRight, Database, TrendingUp, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { Car, Save, Download, RefreshCw, Calculator, FileText, Mail, History, X, Eye, Trash2, Copy, Search, Filter, SortAsc, SortDesc, Calendar, DollarSign, User, Home, Printer, ChevronLeft, ChevronRight, Database, TrendingUp } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
-// Define the invoice type for TypeScript
-interface InvoiceData {
+import { supabase } from '@/supabase/supabaseClient';
+
+type DbInvoiceRow = {
+  id: string;
+  created_at: string;
+  user_id: string | null;
+
+  make: string | null;
+  model: string | null;
+  mm_code: string | null;
+  chassis_no: string | null;
+  engine_no: string | null;
+  register_no: string | null;
+  kilometers: string | null;
+  selling_price: string | null;
+  vat_amount: string | null;
+  year: string | null;
+  condition: string | null;
+  license_no: string | null;
+  color: string | null;
+  total_selling_price: string | null;
+
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+
+  invoice_number: string | null;
+  invoice_date: string | null;
+  address: string | null;
+  notes: string | null;
+};
+
+type InvoiceData = {
   id: string;
   make: string;
   model: string;
+  mmCode?: string;
   chassisNo: string;
   engineNo: string;
+  registerNo?: string;
   kilometers: string;
   sellingPrice: string;
   vatAmount: string;
@@ -29,23 +65,77 @@ interface InvoiceData {
   address: string;
   notes: string;
   createdAt: string;
-}
+};
+
+// Convert DB row -> your InvoiceData (exact shape you already use)
+const mapRowToInvoiceData = (row: DbInvoiceRow): InvoiceData => ({
+  id: row.id,
+  make: row.make ?? '',
+  model: row.model ?? '',
+  chassisNo: row.chassis_no ?? '',
+  engineNo: row.engine_no ?? '',
+  kilometers: row.kilometers ?? '',
+  sellingPrice: row.selling_price ?? '',
+  vatAmount: row.vat_amount ?? '',
+  year: row.year ?? '',
+  condition: row.condition ?? 'USED',
+  licenseNo: row.license_no ?? '',
+  color: row.color ?? '',
+  totalSellingPrice: row.total_selling_price ?? '',
+  customerName: row.customer_name ?? '',
+  customerEmail: row.customer_email ?? '',
+  customerPhone: row.customer_phone ?? '',
+  invoiceNumber: row.invoice_number ?? '',
+  date: row.invoice_date ?? '',
+  address: row.address ?? '',
+  notes: row.notes ?? '',
+  createdAt: row.created_at ?? new Date().toISOString(),
+});
+
+// Your form data -> DB insert payload
+const buildInsertPayload = (finalData: any, userId: string | null) => ({
+  user_id: userId,
+
+  make: finalData.make,
+  model: finalData.model,
+  mm_code: finalData.mmCode,
+  chassis_no: finalData.chassisNo,
+  engine_no: finalData.engineNo,
+  register_no: finalData.registerNo,
+  kilometers: finalData.kilometers,
+  selling_price: finalData.sellingPrice,
+  vat_amount: finalData.vatAmount,
+  year: finalData.year,
+  condition: finalData.condition,
+  license_no: finalData.licenseNo,
+  color: finalData.color,
+  total_selling_price: finalData.totalSellingPrice,
+
+  customer_name: finalData.customerName,
+  customer_email: finalData.customerEmail,
+  customer_phone: finalData.customerPhone,
+
+  invoice_number: finalData.invoiceNumber,
+  invoice_date: finalData.date,
+  address: finalData.address,
+  notes: finalData.notes,
+});
 
 export default function VehicleFormPage() {
   const [formData, setFormData] = useState({
-    make: 'TOYOTA',
-    model: 'FORTUNER 4.0 V6 AVT 4X4',
-    mmCode: '60054440',
-    chassisNo: 'AHTYUS9GX04002340',
-    engineNo: '1GRD881161',
+    make: '',
+    model: '',
+    mmCode: '',
+    chassisNo: '',
+    engineNo: '',
     registerNo: '',
-    kilometers: '314596',
-    sellingPrice: '104347.83',
+    kilometers: '',
+    sellingPrice: '',
     vatAmount: '',
-    year: '2007',
+    year: '',
     condition: 'USED',
-    licenseNo: 'DSK65GM',
-    color: 'Silver',
+    licenseNo: '',
+    color: '',
     totalSellingPrice: '',
     customerName: '',
     customerEmail: '',
@@ -57,6 +147,7 @@ export default function VehicleFormPage() {
   });
 
   const [loading, setLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [invoiceHistory, setInvoiceHistory] = useState<InvoiceData[]>([]);
@@ -80,18 +171,62 @@ export default function VehicleFormPage() {
     swiftCode: 'FIRNZAJJ'
   };
 
-  // Load invoice history from localStorage on component mount
+  // Load invoice history from database on component mount
   useEffect(() => {
-    const savedInvoices = localStorage.getItem('tsk_auto_invoices');
-    if (savedInvoices) {
+    (async () => {
+      setHistoryLoading(true);
       try {
-        const parsedInvoices = JSON.parse(savedInvoices);
-        setInvoiceHistory(parsedInvoices);
-      } catch (error) {
-        console.error('Error loading invoice history:', error);
+        // If you use RLS, you should filter by user_id:
+        // .eq('user_id', userId)
+        // If you do NOT use RLS/shared DB, remove that filter.
+        const query = supabase
+          .from('invoices')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(200);
+
+        // Uncomment this if you enabled RLS policies and want user-only invoices:
+        // const { data: authData } = await supabase.auth.getUser();
+        // const userId = authData.user?.id ?? null;
+        // if (userId) query = query.eq('user_id', userId);
+
+        const { data, error } = await query;
+
+        if (error) {
+          console.error('Error loading invoice history:', error);
+          return;
+        }
+
+        const mapped = (data as DbInvoiceRow[]).map(mapRowToInvoiceData);
+        setInvoiceHistory(mapped);
+      } catch (err) {
+        console.error('Unexpected error loading invoices:', err);
+      } finally {
+        setHistoryLoading(false);
       }
-    }
+    })();
   }, []);
+
+  // Save invoice to database (called inside handleSubmit)
+  const saveInvoiceToDatabase = async (finalData: any) => {
+    const { data: authData } = await supabase.auth.getUser();
+    const userId = authData.user?.id ?? null;
+
+    const payload = buildInsertPayload(finalData, userId);
+
+    const { data, error } = await supabase
+      .from('invoices')
+      .insert(payload)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+
+    const saved = mapRowToInvoiceData(data as DbInvoiceRow);
+
+    // Update UI list immediately (keep last 200 like you did)
+    setInvoiceHistory(prev => [saved, ...prev].slice(0, 200));
+  };
 
   // Filter and sort invoices
   const filteredInvoiceHistory = invoiceHistory.filter(invoice => {
@@ -278,30 +413,15 @@ export default function VehicleFormPage() {
       invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
       date: new Date().toLocaleDateString('en-ZA')
     };
-    
-    setFormData(finalData);
-    
-    // Save to invoice history
-    const invoiceToSave: InvoiceData = {
-      ...finalData,
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString()
-    };
-    
-    const updatedHistory = [invoiceToSave, ...invoiceHistory.slice(0, 199)]; // Keep last 200 invoices
-    setInvoiceHistory(updatedHistory);
-    localStorage.setItem('tsk_auto_invoices', JSON.stringify(updatedHistory));
-    
-    // Simulate API call
-    setTimeout(() => {
-      console.log('Form submitted:', finalData);
-      alert('Vehicle details saved successfully!');
-      setLoading(false);
-    }, 1500);
-  };
 
-  const handleReset = () => {
-    if (confirm('Are you sure you want to reset all fields?')) {
+    try {
+      // SAVE TO DATABASE
+      await saveInvoiceToDatabase(finalData);
+
+      // Show success toast
+      toast.success('Vehicle details saved successfully!');
+
+      // Clear form after successful submission
       setFormData({
         make: '',
         model: '',
@@ -325,12 +445,46 @@ export default function VehicleFormPage() {
         address: '',
         notes: ''
       });
+
+      console.log('Form submitted:', finalData);
+    } catch (error) {
+      console.error('Error saving invoice:', error);
+      toast.error('Error saving invoice to database. Please try again.');
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const handleReset = () => {
+    setFormData({
+      make: '',
+      model: '',
+      mmCode: '',
+      chassisNo: '',
+      engineNo: '',
+      registerNo: '',
+      kilometers: '',
+      sellingPrice: '',
+      vatAmount: '',
+      year: '',
+      condition: 'USED',
+      licenseNo: '',
+      color: '',
+      totalSellingPrice: '',
+      customerName: '',
+      customerEmail: '',
+      customerPhone: '',
+      invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
+      date: new Date().toLocaleDateString('en-ZA'),
+      address: '',
+      notes: ''
+    });
+    toast.success('Form has been reset successfully!');
   };
 
   const generatePDF = async () => {
     if (!invoiceRef.current) {
-      alert('Invoice element not found!');
+      toast.error('Invoice element not found!');
       return;
     }
     
@@ -343,31 +497,45 @@ export default function VehicleFormPage() {
       const originalWidth = element.style.width;
       const originalHeight = element.style.height;
       const originalPadding = element.style.padding;
+      const originalMargin = element.style.margin;
       
-      // Set optimal styles for PDF capture
+      // Set optimal styles for PDF capture - remove all margins and padding for full width
       element.style.width = '210mm';
       element.style.minHeight = 'auto';
       element.style.background = '#ffffff';
-      element.style.padding = '20px';
+      element.style.padding = '10px';
+      element.style.margin = '0';
+      element.style.boxSizing = 'border-box';
       
       // Wait for styles to apply
       await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Calculate the actual pixel width
+      const pxWidth = element.offsetWidth;
       
       const canvas = await html2canvas(element, {
         scale: 2,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        width: 210 * 3.78, // Convert mm to pixels
-        height: element.scrollHeight,
-        windowWidth: 210 * 3.78,
-        windowHeight: element.scrollHeight,
+        allowTaint: true,
+        width: pxWidth,
+        windowWidth: pxWidth,
         onclone: (clonedDoc) => {
           const clonedElement = clonedDoc.getElementById('invoice-for-pdf');
           if (clonedElement) {
             clonedElement.style.width = '210mm';
-            clonedElement.style.minHeight = 'auto';
+            clonedElement.style.padding = '10px';
+            clonedElement.style.margin = '0';
+            clonedElement.style.boxSizing = 'border-box';
             clonedElement.style.background = '#ffffff';
+            clonedElement.style.minHeight = 'auto';
+            clonedElement.style.display = 'block';
+            // Remove any parent container padding/margins
+            if (clonedElement.parentElement) {
+              clonedElement.parentElement.style.padding = '0';
+              clonedElement.parentElement.style.margin = '0';
+            }
           }
         }
       });
@@ -376,18 +544,34 @@ export default function VehicleFormPage() {
       element.style.width = originalWidth;
       element.style.height = originalHeight;
       element.style.padding = originalPadding;
+      element.style.margin = originalMargin;
       
-      const imgWidth = 210; // A4 width in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      
+      // Get PDF page dimensions
       const pdf = new jsPDF({
-        orientation: imgHeight > 297 ? 'portrait' : 'portrait',
+        orientation: 'portrait',
         unit: 'mm',
         format: 'a4'
       });
       
-      // Add image to PDF
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      
+      // Calculate image dimensions to fit page width perfectly
+      const imgHeight = (canvas.height * pageWidth) / canvas.width;
+      
+      // Add image to PDF starting at position 0,0 and stretching to full page width
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, pageWidth, imgHeight);
+      
+      // Add additional pages if content is longer than one page
+      let heightLeft = imgHeight - pageHeight;
+      let position = pageHeight;
+      
+      while (heightLeft > 0) {
+        position = heightLeft - pageHeight;
+        pdf.addPage();
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, -position, pageWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
       
       // Generate filename
       const filename = `TSK-AUTO-Invoice-${formData.invoiceNumber}.pdf`;
@@ -395,7 +579,7 @@ export default function VehicleFormPage() {
       // Save the PDF
       pdf.save(filename);
       
-      alert('Invoice PDF downloaded successfully!');
+      toast.success('Invoice PDF downloaded successfully!');
       
     } catch (error) {
       console.error('Error generating PDF:', error);
@@ -416,10 +600,10 @@ export default function VehicleFormPage() {
         pdf.text(`Account Holder: ${bankInfo.holderName}`, 20, 120);
         pdf.text(`Reference: ${formData.invoiceNumber}`, 20, 130);
         pdf.save(`TSK-Invoice-${formData.invoiceNumber}.pdf`);
-        alert('Basic PDF generated successfully!');
+        toast.success('Basic PDF generated successfully!');
       } catch (fallbackError) {
         console.error('Fallback PDF generation failed:', fallbackError);
-        alert('Error generating PDF. Please try again.');
+        toast.error('Error generating PDF. Please try again.');
       }
     } finally {
       setDownloading(false);
@@ -428,7 +612,7 @@ export default function VehicleFormPage() {
 
   const sendEmail = () => {
     if (!formData.customerEmail) {
-      alert('Please enter customer email to send invoice.');
+      toast.error('Please enter customer email to send invoice.');
       return;
     }
     
@@ -521,26 +705,60 @@ TSK Auto Team`;
     });
     setShowHistory(false);
     setSearchQuery('');
-    alert(`Invoice ${invoice.invoiceNumber} loaded successfully!`);
+    toast.success(`Invoice ${invoice.invoiceNumber} loaded successfully!`);
   };
 
   // Delete invoice from history
-  const deleteInvoice = (id: string) => {
-    if (confirm('Are you sure you want to delete this invoice from history?')) {
-      const updatedHistory = invoiceHistory.filter(invoice => invoice.id !== id);
-      setInvoiceHistory(updatedHistory);
-      localStorage.setItem('tsk_auto_invoices', JSON.stringify(updatedHistory));
-      alert('Invoice deleted from history!');
+  const deleteInvoice = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this invoice from history?')) return;
+
+    try {
+      const { error } = await supabase.from('invoices').delete().eq('id', id);
+
+      if (error) {
+        console.error('Error deleting invoice:', error);
+        toast.error('Failed to delete invoice.');
+        return;
+      }
+
+      setInvoiceHistory(prev => prev.filter(invoice => invoice.id !== id));
+      toast.success('Invoice deleted successfully!');
+    } catch (err) {
+      console.error('Unexpected error deleting invoice:', err);
+      toast.error('Failed to delete invoice.');
     }
   };
 
   // Clear all history
-  const clearHistory = () => {
-    if (confirm('Are you sure you want to clear ALL invoice history? This action cannot be undone.')) {
+  const clearHistory = async () => {
+    if (!confirm('Are you sure you want to clear ALL invoice history? This action cannot be undone.')) return;
+
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id ?? null;
+
+      // If you use RLS + want user-only clear:
+      // delete where user_id == userId
+      // If shared table/no auth: this would clear ALL rows (danger).
+      let q = supabase.from('invoices').delete();
+
+      // SAFER DEFAULT: if userId exists, clear only that user's invoices
+      if (userId) q = q.eq('user_id', userId);
+
+      const { error } = await q;
+
+      if (error) {
+        console.error('Error clearing history:', error);
+        toast.error('Failed to clear invoice history.');
+        return;
+      }
+
       setInvoiceHistory([]);
       setSearchQuery('');
-      localStorage.removeItem('tsk_auto_invoices');
-      alert('All invoice history cleared!');
+      toast.success('Invoice history cleared successfully!');
+    } catch (err) {
+      console.error('Unexpected error clearing history:', err);
+      toast.error('Failed to clear invoice history.');
     }
   };
 
@@ -552,7 +770,7 @@ TSK Auto Team`;
   // Copy invoice number to clipboard
   const copyInvoiceNumber = (invoiceNumber: string) => {
     navigator.clipboard.writeText(invoiceNumber);
-    alert(`Invoice number ${invoiceNumber} copied to clipboard!`);
+    toast.success(`Invoice number ${invoiceNumber} copied to clipboard!`);
   };
 
   // Toggle sort order
@@ -563,7 +781,7 @@ TSK Auto Team`;
   // Export all invoices as CSV
   const exportToCSV = () => {
     if (filteredInvoiceHistory.length === 0) {
-      alert('No invoices to export!');
+      toast.error('No invoices to export.');
       return;
     }
 
@@ -677,7 +895,7 @@ TSK Auto Team`;
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-900 dark:to-blue-900/20">
         {/* Top Navigation */}
         <div className="sticky top-0 z-50 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="w-full mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-16">
               <div className="flex items-center gap-4">
                 <button
@@ -736,7 +954,7 @@ TSK Auto Team`;
         </div>
 
         {/* Main Content */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Stats Overview */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-200 dark:border-gray-700">
@@ -951,7 +1169,7 @@ TSK Auto Team`;
               </div>
               <div className="flex items-center gap-4">
                 <div className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-3 py-1 rounded-full">
-                  Press "/" to search • "Esc" to go back
+                  Press &quot;/&quot; to search • &quot;Esc&quot; to go back
                 </div>
                 <div className="text-sm">
                   Page {currentPage} of {totalPages}
@@ -961,7 +1179,19 @@ TSK Auto Team`;
           </div>
 
           {/* Invoice Content */}
-          {filteredInvoiceHistory.length === 0 ? (
+          {historyLoading ? (
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 p-12 text-center">
+              <div className="w-24 h-24 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-8 h-8 border-4 border-gray-300 dark:border-gray-600 border-t-blue-500 rounded-full animate-spin"></div>
+              </div>
+              <h3 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                Loading Your Invoices
+              </h3>
+              <p className="text-gray-500 dark:text-gray-400 text-center max-w-md mx-auto">
+                Fetching your invoice history from the database...
+              </p>
+            </div>
+          ) : filteredInvoiceHistory.length === 0 ? (
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 p-12 text-center">
               {searchQuery ? (
                 <>
@@ -969,7 +1199,7 @@ TSK Auto Team`;
                     <Search className="w-12 h-12 text-gray-400" />
                   </div>
                   <h3 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 mb-3">
-                    No invoices found for "{searchQuery}"
+                    No invoices found for &quot;{searchQuery}&quot;
                   </h3>
                   <p className="text-gray-500 dark:text-gray-400 text-center max-w-md mx-auto mb-8">
                     Try searching by invoice number, customer name, vehicle make/model, or chassis number.
@@ -990,7 +1220,7 @@ TSK Auto Team`;
                     No invoice history yet
                   </h3>
                   <p className="text-gray-500 dark:text-gray-400 text-center max-w-md mx-auto mb-8">
-                    Your saved invoices will appear here after you save them using the "Save & Generate Invoice" button.
+                    Your saved invoices will appear here after you save them using the &quot;Save &amp; Generate Invoice&quot; button.
                   </p>
                   <button
                     onClick={() => setShowHistory(false)}
@@ -1274,6 +1504,153 @@ TSK Auto Team`;
             </div>
           </div>
         </div>
+
+        {/* Invoice Details Modal - In History View */}
+        {selectedInvoice && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] overflow-hidden"
+            >
+              <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-blue-600">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">
+                      Invoice Details
+                    </h2>
+                    <p className="text-sm text-blue-100">
+                      {selectedInvoice.invoiceNumber}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedInvoice(null)}
+                    className="text-white hover:text-blue-200 transition-colors"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6 overflow-y-auto max-h-[60vh]">
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Invoice Info</h3>
+                      <div className="space-y-2">
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Invoice Number</p>
+                          <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.invoiceNumber}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Date</p>
+                          <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.date}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Created</p>
+                          <p className="font-medium text-gray-900 dark:text-white">{formatDate(selectedInvoice.createdAt)}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Customer Info</h3>
+                      <div className="space-y-2">
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Customer Name</p>
+                          <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.customerName}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Email</p>
+                          <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.customerEmail}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Phone</p>
+                          <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.customerPhone}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Vehicle Details</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Make & Model</p>
+                        <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.make} {selectedInvoice.model}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Year</p>
+                        <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.year}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Color</p>
+                        <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.color}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Condition</p>
+                        <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.condition}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Kilometers</p>
+                        <p className="font-medium text-gray-900 dark:text-white">{selectedInvoice.kilometers} km</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Chassis No</p>
+                        <p className="font-mono font-medium text-gray-900 dark:text-white text-sm">{selectedInvoice.chassisNo}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Pricing Details</h3>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span className="text-gray-600 dark:text-gray-400">Selling Price</span>
+                        <span className="font-medium text-gray-900 dark:text-white">R {formatCurrency(selectedInvoice.sellingPrice)}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                        <span className="text-gray-600 dark:text-gray-400">VAT (15%)</span>
+                        <span className="font-medium text-green-600 dark:text-green-400">R {formatCurrency(selectedInvoice.vatAmount)}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-gray-900 dark:text-white font-semibold">Total Amount</span>
+                        <span className="font-bold text-lg text-blue-600 dark:text-blue-400">R {formatCurrency(selectedInvoice.totalSellingPrice)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {selectedInvoice.notes && (
+                    <div>
+                      <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Notes</h3>
+                      <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                        <p className="text-gray-700 dark:text-gray-300">{selectedInvoice.notes}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        loadInvoice(selectedInvoice);
+                        setSelectedInvoice(null);
+                      }}
+                      className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                    >
+                      Load This Invoice
+                    </button>
+                    <button
+                      onClick={() => setSelectedInvoice(null)}
+                      className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1281,7 +1658,7 @@ TSK Auto Team`;
   // Original Form Page
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-900 dark:to-blue-900/20 p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full mx-auto">
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
@@ -1793,7 +2170,7 @@ TSK Auto Team`;
                           type="text"
                           value={formatCurrency(formData.totalSellingPrice)}
                           readOnly
-                          className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 border-2 border-blue-300 dark:border-blue-600 rounded-lg text-lg font-medium text-blue-600 dark:text-blue-400 font-bold"
+                          className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 border-2 border-blue-300 dark:border-blue-600 rounded-lg text-lg font-bold text-blue-600 dark:text-blue-400"
                         />
                         <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
                           <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-2 py-1 rounded">
@@ -1891,8 +2268,8 @@ TSK Auto Team`;
               animate={{ opacity: 1, x: 0 }}
               className="sticky top-8"
             >
-              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden mb-6">
-                <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-blue-600">
+              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl mb-6">
+                <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-blue-600 rounded-t-2xl">
                   <div className="flex items-center justify-between">
                     <h2 className="text-xl font-bold text-white">
                       Invoice Preview
@@ -1904,12 +2281,12 @@ TSK Auto Team`;
                   </p>
                 </div>
 
-                <div className="p-4 bg-gray-50 dark:bg-gray-900">
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-b-2xl flex justify-center items-start py-4">
                   {/* Invoice Template - PDF Optimized */}
                   <div
                     ref={invoiceRef}
                     id="invoice-for-pdf"
-                    className="bg-white mx-auto scale-75 origin-top md:scale-100"
+                    className="bg-white"
                     style={{ 
                       width: '210mm',
                       minHeight: '297mm',
@@ -1919,7 +2296,8 @@ TSK Auto Team`;
                       background: '#ffffff',
                       lineHeight: '1.3',
                       boxShadow: '0 0 20px rgba(0,0,0,0.1)',
-                      transformOrigin: 'top'
+                      padding: '15px',
+                      boxSizing: 'border-box'
                     }}
                   >
                     {/* Header Section - Modified with centered company info and logo */}
@@ -2193,7 +2571,7 @@ TSK Auto Team`;
                               </li>
                               <li style={{ display: 'flex', alignItems: 'flex-start' }}>
                                 <span style={{ color: '#2563eb', marginRight: '4px' }}>•</span>
-                                Valid driver's license required for test drive
+                                Valid driver&apos;s license required for test drive
                               </li>
                             </ul>
                           </div>
@@ -2237,11 +2615,6 @@ TSK Auto Team`;
                         </p>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="mt-4 text-center">
-                    <p className="text-sm text-gray-500">Invoice preview for: <span className="font-bold text-blue-600">{formData.invoiceNumber}</span></p>
-                    <p className="text-xs text-gray-400 mt-0.5">Click "Download Invoice" to generate PDF</p>
                   </div>
                 </div>
               </div>
@@ -2287,7 +2660,7 @@ TSK Auto Team`;
                     onClick={() => {
                       const bankDetails = `Bank: ${bankInfo.name}\nAccount: ${bankInfo.accountNumber}\nHolder: ${bankInfo.holderName}\nBranch: ${bankInfo.branchNumber}\nSWIFT: ${bankInfo.swiftCode}`;
                       navigator.clipboard.writeText(bankDetails);
-                      alert('Bank details copied to clipboard!');
+                      toast.success('Bank details copied to clipboard!');
                     }}
                     className="px-4 py-3 bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/50 transition-colors text-sm font-medium"
                   >
