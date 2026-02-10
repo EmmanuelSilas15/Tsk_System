@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Car, Save, Download, RefreshCw, Calculator, FileText, Mail, History, X, Eye, Trash2, Copy, Search, Filter, SortAsc, SortDesc, Calendar, DollarSign, User, Home, Printer, ChevronLeft, ChevronRight, Database, TrendingUp } from 'lucide-react';
+import { Car, Save, Download, RefreshCw, Calculator, FileText, Mail, History, X, Eye, Trash2, Copy, Search, Filter, SortAsc, SortDesc, Calendar, DollarSign, User, Home, Printer, ChevronLeft, ChevronRight, Database, TrendingUp, LogOut } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { ToastContainer, toast } from 'react-toastify';
@@ -772,6 +772,33 @@ TSK Auto Team`;
     navigator.clipboard.writeText(invoiceNumber);
     toast.success(`Invoice number ${invoiceNumber} copied to clipboard!`);
   };
+
+  const logout = async () => {
+  try {
+    setLoading(true); // reuse your existing loading state if you want
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error('Logout error:', error);
+      toast.error('Failed to logout. Please try again.');
+      return;
+    }
+
+    // Optional: clean local UI state (doesn't affect your design)
+    setShowHistory(false);
+    setSelectedInvoice(null);
+    setSearchQuery('');
+    setInvoiceHistory([]);
+
+    // Redirect (choose ONE)
+    window.location.href = '/login'; // or '/'
+  } catch (err) {
+    console.error('Unexpected logout error:', err);
+    alert('Failed to logout. Please try again.');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   // Toggle sort order
   const toggleSortOrder = () => {
@@ -1729,6 +1756,15 @@ TSK Auto Team`;
                     Download Invoice
                   </>
                 )}
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={logout}
+                className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                Log out
               </motion.button>
             </div>
           </div>
